@@ -33,10 +33,10 @@ Requires Python 3.10+.
 
 ```bash
 pip install -r requirements.txt
-streamlit run Dome_Points_Console.py
+streamlit run DomeCraft.py
 ```
 
-On Windows you can simply double-click **`Launch_Dome_Points_Console.bat`** — it starts the app and installs missing packages automatically on first run.
+On Windows you can simply double-click **`Launch_DomeCraft.bat`** — it starts the app and installs missing packages automatically on first run.
 
 The app opens in your browser at `http://localhost:8501`.
 
@@ -60,11 +60,11 @@ The app opens in your browser at `http://localhost:8501`.
 
 | Path | What it is |
 |---|---|
-| `Dome_Points_Console.py` | The whole app: geometry engine, UI, DXF import/export |
+| `DomeCraft.py` | The whole app: geometry engine, UI, DXF import/export |
 | `points_canvas/index.html` | Custom drawing-board component (mouse editing, JS PCHIP preview) |
 | `live_chart/index.html` | Persistent chart component — in-place Plotly updates, view preservation |
 | `live_slider/index.html` | Slider that streams values while dragging |
-| `Launch_Dome_Points_Console.bat` | One-click Windows launcher |
+| `Launch_DomeCraft.bat` | One-click Windows launcher |
 
 ---
 
@@ -93,7 +93,7 @@ The app opens in your browser at `http://localhost:8501`.
 
 ```bash
 pip install -r requirements.txt
-streamlit run Dome_Points_Console.py
+streamlit run DomeCraft.py
 ```
 
-בווינדוס אפשר פשוט ללחוץ פעמיים על `Launch_Dome_Points_Console.bat` — ההפעלה הראשונה תתקין אוטומטית חבילות חסרות.
+בווינדוס אפשר פשוט ללחוץ פעמיים על `Launch_DomeCraft.bat` — ההפעלה הראשונה תתקין אוטומטית חבילות חסרות.

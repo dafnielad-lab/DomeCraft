@@ -1,11 +1,11 @@
 @echo off
 cd /d "%~dp0"
 echo ==========================================
-echo   Dome Points Console Launcher
+echo   DomeCraft Launcher
 echo ==========================================
 echo.
 echo Starting Streamlit server...
-streamlit run Dome_Points_Console.py
+streamlit run DomeCraft.py
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [!] Streamlit failed to start.
@@ -13,6 +13,6 @@ if %ERRORLEVEL% NEQ 0 (
     pip install -r requirements.txt
     echo.
     echo Retrying...
-    streamlit run Dome_Points_Console.py
+    streamlit run DomeCraft.py
 )
 pause
