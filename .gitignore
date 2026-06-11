@@ -1,0 +1,6 @@
+# Auto-generated local copy of plotly.js (created on first run)
+live_chart/plotly.min.js
+
+__pycache__/
+*.pyc
+.streamlit/

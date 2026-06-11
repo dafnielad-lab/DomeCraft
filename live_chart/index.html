@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
+  #chart { width: 100%; }
+</style>
+<script src="./plotly.min.js"></script>
+</head>
+<body>
+<div id="chart"></div>
+<script>
+"use strict";
+function sendToStreamlit(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+window.addEventListener("message", function (ev) {
+  var msg = ev.data;
+  if (!msg || msg.type !== "streamlit:render") return;
+  var args = msg.args || {};
+  var h = args.height || 600;
+  var el = document.getElementById("chart");
+  el.style.height = h + "px";
+  try {
+    var fig = JSON.parse(args.fig);
+    fig.layout = fig.layout || {};
+    fig.layout.autosize = true;
+    var sceneIn = fig.layout.scene;
+    var baseAspect = (sceneIn && sceneIn.aspectratio) ? JSON.parse(JSON.stringify(sceneIn.aspectratio)) : null;
+
+    if (sceneIn && el._fullLayout && el._fullLayout.scene) {
+      var sc = el._fullLayout.scene;
+      // Carry the user's rotation: read the LIVE camera from the WebGL scene
+      var liveCam = (sc._scene && sc._scene.getCamera) ? sc._scene.getCamera() : sc.camera;
+      if (liveCam) fig.layout.scene.camera = JSON.parse(JSON.stringify(liveCam));
+      // In ORTHOGRAPHIC mode plotly implements wheel zoom by scaling the
+      // glplot aspect box (NOT the camera). Capture the user's current zoom
+      // factor relative to the base aspect we applied last time.
+      if (sc._scene && sc._scene.glplot && sc._scene.glplot.getAspectratio && el.__baseAspect) {
+        var liveA = sc._scene.glplot.getAspectratio();
+        var zf = liveA.x / el.__baseAspect.x;
+        if (isFinite(zf) && zf > 0) el.__zoomFactor = zf;
+      }
+    }
+    if (sceneIn && el.__zoomFactor === undefined) {
+      el.__zoomFactor = args.default_zoom || 1;   // closer initial zoom
+    }
+    // BAKE the zoom into the layout itself, so the chart is rendered directly
+    // at the user's zoom level in one atomic step. A post-render correction
+    // (the previous approach) only took effect on the next interaction, which
+    // caused the small-then-jump behavior.
+    if (baseAspect) {
+      var zBake = el.__zoomFactor || 1;
+      fig.layout.scene.aspectratio = {
+        x: baseAspect.x * zBake, y: baseAspect.y * zBake, z: baseAspect.z * zBake
+      };
+      el.__baseAspect = baseAspect;
+    }
+
+    // Plotly.react updates the existing chart IN PLACE - no flicker because
+    // Streamlit never re-creates this iframe.
+    Plotly.react(el, fig.data, fig.layout, { responsive: true, displaylogo: false });
+  } catch (e) {
+    el.innerHTML = "<pre style='color:red'>" + e + "</pre>";
+  }
+  sendToStreamlit("streamlit:setFrameHeight", { height: h });
+});
+window.addEventListener("resize", function () {
+  var el = document.getElementById("chart");
+  if (el && el.data) Plotly.Plots.resize(el);
+});
+sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

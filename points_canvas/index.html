@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; font-family: 'Segoe UI', 'Inter', sans-serif; background: transparent; overflow: hidden; }
+  #toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 2px 6px 2px; }
+  #toolbar button {
+    border: 1px solid #ccc; background: #fff; border-radius: 6px;
+    padding: 4px 12px; font-size: 13px; cursor: pointer; color: #222;
+  }
+  #toolbar button:hover { background: #f0f4ff; border-color: #88a; }
+  #readout { font-size: 13px; color: #004d99; min-width: 150px; font-family: Consolas, monospace; }
+  #hint { margin-left: auto; color: #999; font-size: 12px; }
+  #board {
+    width: 100%; display: block; background: #ffffff;
+    border: 1px solid #ddd; border-radius: 8px; cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="fitBtn" title="Fit view to points">&#x2922; Fit</button>
+  <button id="resetBtn" title="Reset to default points">&#x21BA; Reset</button>
+  <span id="readout"></span>
+  <span id="hint">Click: add &nbsp;&middot;&nbsp; Drag: move &nbsp;&middot;&nbsp; Right-click: delete &nbsp;&middot;&nbsp; Wheel: zoom &nbsp;&middot;&nbsp; Shift+Drag: pan</span>
+</div>
+<canvas id="board"></canvas>
+
+<script>
+"use strict";
+
+// ============ Streamlit component protocol (manual, no lib) ============
+function sendToStreamlit(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+
+// ============ State ============
+var CANVAS_H = 520;
+var points = [];                       // [[r, z], ...] kept sorted by r
+var defaultPoints = [[0, 1], [0.4, 0.98], [0.8, 0.9], [1.2, 0.72], [1.6, 0.45], [2, 0]];
+var initialized = false;
+var view = { x0: -0.3, x1: 2.6, y0: -0.4, y1: 1.5 };   // world window
+var dragIdx = -1;
+var hoverIdx = -1;
+var panning = false;
+var panStart = null;
+
+var canvas = document.getElementById("board");
+var ctx = canvas.getContext("2d");
+var readout = document.getElementById("readout");
+
+// ============ Coordinate transforms ============
+function W() { return canvas.clientWidth; }
+function H() { return CANVAS_H; }
+function toPx(p) {
+  return [
+    (p[0] - view.x0) / (view.x1 - view.x0) * W(),
+    H() - (p[1] - view.y0) / (view.y1 - view.y0) * H()
+  ];
+}
+function toWorld(px, py) {
+  return [
+    view.x0 + px / W() * (view.x1 - view.x0),
+    view.y0 + (H() - py) / H() * (view.y1 - view.y0)
+  ];
+}
+
+function sortPts() { points.sort(function (a, b) { return a[0] - b[0]; }); }
+
+function fitView() {
+  var minX = 0, maxX = 1, minY = 0, maxY = 1;
+  if (points.length) {
+    minX = Math.min(0, Math.min.apply(null, points.map(function (p) { return p[0]; })));
+    maxX = Math.max.apply(null, points.map(function (p) { return p[0]; }));
+    minY = Math.min(0, Math.min.apply(null, points.map(function (p) { return p[1]; })));
+    maxY = Math.max.apply(null, points.map(function (p) { return p[1]; }));
+  }
+  var spanX = Math.max(maxX - minX, 0.5), spanY = Math.max(maxY - minY, 0.5);
+  // keep aspect pleasant: pad generously so there is room to work
+  view.x0 = minX - spanX * 0.18;
+  view.x1 = maxX + spanX * 0.30;
+  view.y0 = minY - spanY * 0.25;
+  view.y1 = maxY + spanY * 0.25;
+}
+
+// ============ PCHIP (Fritsch-Carlson), same shape as scipy ============
+function pchipSlopes(xs, ys) {
+  var n = xs.length, h = [], delta = [], i;
+  for (i = 0; i < n - 1; i++) { h.push(xs[i + 1] - xs[i]); delta.push((ys[i + 1] - ys[i]) / h[i]); }
+  var d = new Array(n).fill(0);
+  if (n === 2) { d[0] = delta[0]; d[1] = delta[0]; return d; }
+  for (i = 1; i < n - 1; i++) {
+    if (delta[i - 1] * delta[i] > 0) {
+      var w1 = 2 * h[i] + h[i - 1], w2 = h[i] + 2 * h[i - 1];
+      d[i] = (w1 + w2) / (w1 / delta[i - 1] + w2 / delta[i]);
+    }
+  }
+  d[0] = edgeSlope(h[0], h[1], delta[0], delta[1]);
+  d[n - 1] = edgeSlope(h[n - 2], h[n - 3], delta[n - 2], delta[n - 3]);
+  return d;
+}
+function edgeSlope(h0, h1, d0, d1) {
+  if (h1 === undefined) { h1 = h0; } if (d1 === undefined) { d1 = d0; }
+  var s = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+  if (s * d0 <= 0) s = 0;
+  else if (d0 * d1 < 0 && Math.abs(s) > 3 * Math.abs(d0)) s = 3 * d0;
+  return s;
+}
+function evalCurve(nSamples) {
+  if (points.length < 2) return [];
+  var xs = points.map(function (p) { return p[0]; });
+  var ys = points.map(function (p) { return p[1]; });
+  var d = pchipSlopes(xs, ys);
+  var out = [], j = 0, k;
+  for (k = 0; k <= nSamples; k++) {
+    var x = xs[0] + (xs[xs.length - 1] - xs[0]) * k / nSamples;
+    while (j < xs.length - 2 && x > xs[j + 1]) j++;
+    var hh = xs[j + 1] - xs[j], t = (x - xs[j]) / hh;
+    var t2 = t * t, t3 = t2 * t;
+    var y = (2 * t3 - 3 * t2 + 1) * ys[j] + (t3 - 2 * t2 + t) * hh * d[j]
+          + (-2 * t3 + 3 * t2) * ys[j + 1] + (t3 - t2) * hh * d[j + 1];
+    out.push([x, y]);
+  }
+  return out;
+}
+
+// ============ Drawing ============
+function niceStep(span, targetPx, totalPx) {
+  var raw = span * targetPx / totalPx;
+  var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  var norm = raw / mag;
+  var step = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+  return step * mag;
+}
+function draw() {
+  var dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W(), H());
+
+  // --- grid ---
+  var sx = niceStep(view.x1 - view.x0, 80, W());
+  var sy = niceStep(view.y1 - view.y0, 60, H());
+  ctx.font = "11px 'Segoe UI'";
+  ctx.fillStyle = "#aaa";
+  var x, y, p;
+  ctx.strokeStyle = "#eee";
+  ctx.lineWidth = 1;
+  for (x = Math.ceil(view.x0 / sx) * sx; x <= view.x1; x += sx) {
+    p = toPx([x, 0]);
+    ctx.beginPath(); ctx.moveTo(p[0], 0); ctx.lineTo(p[0], H()); ctx.stroke();
+    ctx.fillText((Math.round(x / sx) * sx).toFixed(sx < 0.99 ? (sx < 0.099 ? 2 : 1) : 0), p[0] + 3, H() - 5);
+  }
+  for (y = Math.ceil(view.y0 / sy) * sy; y <= view.y1; y += sy) {
+    p = toPx([0, y]);
+    ctx.beginPath(); ctx.moveTo(0, p[1]); ctx.lineTo(W(), p[1]); ctx.stroke();
+    ctx.fillText((Math.round(y / sy) * sy).toFixed(sy < 0.99 ? (sy < 0.099 ? 2 : 1) : 0), 4, p[1] - 3);
+  }
+  // --- axes ---
+  ctx.strokeStyle = "#bbb";
+  ctx.lineWidth = 1.5;
+  p = toPx([0, 0]);
+  ctx.beginPath(); ctx.moveTo(p[0], 0); ctx.lineTo(p[0], H()); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, p[1]); ctx.lineTo(W(), p[1]); ctx.stroke();
+
+  // --- spline curve ---
+  var curve = evalCurve(400);
+  if (curve.length) {
+    ctx.strokeStyle = "#004d99";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    curve.forEach(function (pt, i) {
+      var q = toPx(pt);
+      if (i === 0) ctx.moveTo(q[0], q[1]); else ctx.lineTo(q[0], q[1]);
+    });
+    ctx.stroke();
+  }
+
+  // --- control points ---
+  points.forEach(function (pt, i) {
+    var q = toPx(pt);
+    ctx.beginPath();
+    ctx.arc(q[0], q[1], i === dragIdx ? 9 : (i === hoverIdx ? 8 : 6.5), 0, 2 * Math.PI);
+    ctx.fillStyle = i === dragIdx ? "#cc0000" : "#e63946";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#fff";
+    ctx.stroke();
+    if (i === dragIdx || i === hoverIdx) {
+      ctx.fillStyle = "#004d99";
+      ctx.font = "12px Consolas";
+      ctx.fillText("(" + pt[0].toFixed(3) + ", " + pt[1].toFixed(3) + ")", q[0] + 12, q[1] - 10);
+    }
+  });
+}
+
+// ============ Interaction ============
+function mousePos(e) {
+  var rect = canvas.getBoundingClientRect();
+  return [e.clientX - rect.left, e.clientY - rect.top];
+}
+function hitTest(px, py) {
+  var best = -1, bestD = 12;   // 12px grab radius
+  points.forEach(function (pt, i) {
+    var q = toPx(pt);
+    var d = Math.hypot(q[0] - px, q[1] - py);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+function clampDrag(i, wx, wy) {
+  var gap = (view.x1 - view.x0) * 0.004;
+  if (i > 0) wx = Math.max(wx, points[i - 1][0] + gap);
+  if (i < points.length - 1) wx = Math.min(wx, points[i + 1][0] - gap);
+  wx = Math.max(wx, 0);                 // radius cannot be negative
+  return [wx, wy];
+}
+function pushValue() {
+  var val = points.map(function (p) { return [Math.round(p[0] * 1e6) / 1e6, Math.round(p[1] * 1e6) / 1e6]; });
+  sendToStreamlit("streamlit:setComponentValue", { value: val, dataType: "json" });
+}
+
+// Throttled push so dragging a point streams live updates to the graphs
+var lastPushTime = 0, pendingPush = null;
+function throttledPush() {
+  var now = Date.now();
+  var wait = 100 - (now - lastPushTime);
+  if (wait <= 0) { lastPushTime = now; pushValue(); }
+  else if (!pendingPush) {
+    pendingPush = setTimeout(function () {
+      pendingPush = null; lastPushTime = Date.now(); pushValue();
+    }, wait);
+  }
+}
+
+canvas.addEventListener("mousedown", function (e) {
+  if (e.button === 1 || (e.button === 0 && e.shiftKey)) {       // pan
+    panning = true;
+    panStart = { px: e.clientX, py: e.clientY, v: Object.assign({}, view) };
+    canvas.style.cursor = "grabbing";
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0) return;
+  var m = mousePos(e);
+  var hit = hitTest(m[0], m[1]);
+  if (hit >= 0) {
+    dragIdx = hit;
+  } else {
+    // add a new point right here and start dragging it immediately
+    var w = toWorld(m[0], m[1]);
+    if (w[0] < 0) w[0] = 0;
+    var gap = (view.x1 - view.x0) * 0.004;
+    for (var i = 0; i < points.length; i++) {
+      if (Math.abs(points[i][0] - w[0]) < gap) w[0] = points[i][0] + gap;
+    }
+    points.push([w[0], w[1]]);
+    sortPts();
+    dragIdx = points.findIndex(function (p) { return p[0] === w[0] && p[1] === w[1]; });
+    pushValue();
+  }
+  draw();
+});
+
+window.addEventListener("mousemove", function (e) {
+  if (panning && panStart) {
+    var kx = (view.x1 - view.x0) / W(), ky = (view.y1 - view.y0) / H();
+    var dx = (e.clientX - panStart.px) * kx, dy = (e.clientY - panStart.py) * ky;
+    view.x0 = panStart.v.x0 - dx; view.x1 = panStart.v.x1 - dx;
+    view.y0 = panStart.v.y0 + dy; view.y1 = panStart.v.y1 + dy;
+    draw();
+    return;
+  }
+  var m = mousePos(e);
+  if (dragIdx >= 0) {
+    var w = toWorld(m[0], m[1]);
+    var c = clampDrag(dragIdx, w[0], w[1]);
+    points[dragIdx][0] = c[0];
+    points[dragIdx][1] = c[1];
+    readout.textContent = "(" + c[0].toFixed(3) + ", " + c[1].toFixed(3) + ")";
+    draw();
+    throttledPush();   // stream the change live while dragging
+  } else {
+    var h = hitTest(m[0], m[1]);
+    if (h !== hoverIdx) { hoverIdx = h; draw(); }
+    canvas.style.cursor = h >= 0 ? "pointer" : "crosshair";
+    var w2 = toWorld(m[0], m[1]);
+    readout.textContent = "(" + w2[0].toFixed(3) + ", " + w2[1].toFixed(3) + ")";
+  }
+});
+
+window.addEventListener("mouseup", function (e) {
+  if (panning) { panning = false; canvas.style.cursor = "crosshair"; return; }
+  if (dragIdx >= 0) {
+    dragIdx = -1;
+    draw();
+    pushValue();          // notify Python only when the drag ends
+  }
+});
+
+canvas.addEventListener("contextmenu", function (e) {
+  e.preventDefault();
+  var m = mousePos(e);
+  var hit = hitTest(m[0], m[1]);
+  if (hit >= 0 && points.length > 2) {
+    points.splice(hit, 1);
+    hoverIdx = -1;
+    draw();
+    pushValue();
+  }
+});
+
+canvas.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var m = mousePos(e);
+  var w = toWorld(m[0], m[1]);
+  var f = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  view.x0 = w[0] + (view.x0 - w[0]) * f;
+  view.x1 = w[0] + (view.x1 - w[0]) * f;
+  view.y0 = w[1] + (view.y0 - w[1]) * f;
+  view.y1 = w[1] + (view.y1 - w[1]) * f;
+  draw();
+}, { passive: false });
+
+document.getElementById("fitBtn").addEventListener("click", function () { fitView(); draw(); });
+document.getElementById("resetBtn").addEventListener("click", function () {
+  points = defaultPoints.map(function (p) { return p.slice(); });
+  fitView(); draw(); pushValue();
+});
+
+// ============ Sizing ============
+function resize() {
+  var dpr = window.devicePixelRatio || 1;
+  canvas.style.height = CANVAS_H + "px";
+  canvas.width = Math.max(300, canvas.clientWidth) * dpr;
+  canvas.height = CANVAS_H * dpr;
+  draw();
+}
+window.addEventListener("resize", resize);
+
+// ============ Streamlit lifecycle ============
+window.addEventListener("message", function (ev) {
+  var msg = ev.data;
+  if (!msg || msg.type !== "streamlit:render") return;
+  var args = msg.args || {};
+  if (args.height) CANVAS_H = args.height;
+  if (!initialized) {
+    if (args.default_points && args.default_points.length >= 2) {
+      defaultPoints = args.default_points.map(function (p) { return [Number(p[0]), Number(p[1])]; });
+    }
+    var init = (args.initial || []).map(function (p) { return [Number(p[0]), Number(p[1])]; })
+      .filter(function (p) { return isFinite(p[0]) && isFinite(p[1]); });
+    points = init.length >= 2 ? init : defaultPoints.map(function (p) { return p.slice(); });
+    sortPts();
+    fitView();
+    initialized = true;
+  }
+  resize();
+  sendToStreamlit("streamlit:setFrameHeight", { height: CANVAS_H + 40 });
+});
+sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

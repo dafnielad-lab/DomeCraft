@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
+  input[type=range] { flex: 1; accent-color: #e63946; height: 24px; cursor: pointer; }
+  .val { font-family: Consolas, monospace; font-size: 13px; color: #004d99; min-width: 62px; text-align: right; }
+</style>
+</head>
+<body>
+<div class="row">
+  <input type="range" id="rng">
+  <span class="val" id="val"></span>
+</div>
+<script>
+"use strict";
+// A slider that emits values continuously WHILE dragging (Streamlit's own
+// slider only commits on release). Two-way sync with the +/- buttons is done
+// through a (value, nonce) push: a changed nonce means Python moved the value.
+function send(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+var rng = document.getElementById("rng");
+var val = document.getElementById("val");
+var lastNonce = -1, decimals = 2, lastSent = 0, pending = null;
+
+function fmt(v) { return Number(v).toFixed(decimals); }
+function push() {
+  send("streamlit:setComponentValue", {
+    value: { value: parseFloat(rng.value), nonce: lastNonce },
+    dataType: "json"
+  });
+}
+function throttledPush() {
+  var now = Date.now();
+  var wait = 90 - (now - lastSent);
+  if (wait <= 0) { lastSent = now; push(); }
+  else if (!pending) {
+    pending = setTimeout(function () { pending = null; lastSent = Date.now(); push(); }, wait);
+  }
+}
+rng.addEventListener("input", function () { val.textContent = fmt(rng.value); throttledPush(); });
+rng.addEventListener("change", function () { val.textContent = fmt(rng.value); push(); });
+
+window.addEventListener("message", function (ev) {
+  var msg = ev.data;
+  if (!msg || msg.type !== "streamlit:render") return;
+  var a = msg.args || {};
+  rng.min = a.min; rng.max = a.max; rng.step = a.step;
+  if (a.decimals !== undefined) decimals = a.decimals;
+  if (a.nonce !== lastNonce) {       // Python moved the value (e.g. +/- button)
+    lastNonce = a.nonce;
+    rng.value = a.value;
+  }
+  val.textContent = fmt(rng.value);
+  send("streamlit:setFrameHeight", { height: 34 });
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>
