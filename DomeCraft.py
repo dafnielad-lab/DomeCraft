@@ -49,11 +49,11 @@ def adjust_live(name, delta, vmin, vmax):
     push["value"] = float(np.clip(cur + delta, vmin, vmax))
     push["nonce"] += 1
 
-def _apply_a_box():
-    """Exact numeric entry for a: push the typed value into the live slider."""
-    lim = float(st.session_state.get("A_lim", 5.0))
-    push = st.session_state.setdefault("a_push", {"value": 1.0, "nonce": 0})
-    push["value"] = float(np.clip(st.session_state.get("a_box", push["value"]), -lim, lim))
+def _apply_box(name, vmin, vmax):
+    """Exact numeric entry: push the typed value into the live slider."""
+    push = st.session_state.setdefault(f"{name}_push", {"value": vmin, "nonce": 0})
+    val = st.session_state.get(f"{name}_box", push["value"])
+    push["value"] = float(np.clip(val, vmin, vmax))
     push["nonce"] += 1
 
 # ===== 2a. Live Chart Component =====
@@ -91,6 +91,24 @@ def live_value(name, vmin, vmax, step, decimals, default):
     if ret and ret.get("nonce") == push["nonce"]:
         return float(np.clip(ret["value"], vmin, vmax))
     return float(push["value"])
+
+def live_control(label, name, vmin, vmax, step, decimals, default, btn_step):
+    """A full control block: label + exact-entry box on one row, then a
+    minus-button / live-slider / plus-button row. Used for a, t and the
+    second support series so all of them share the exact same design."""
+    lr = st.columns([0.55, 0.45])
+    with lr[0]: st.markdown(f"**{label}**")
+    row = st.columns([0.14, 0.72, 0.14], gap="small")
+    with row[0]: st.button("➖", on_click=adjust_live, args=(name, -btn_step, vmin, vmax), key=f"{name}_m")
+    with row[1]: val = live_value(name, vmin, vmax, step, decimals, default)
+    with row[2]: st.button("➕", on_click=adjust_live, args=(name, +btn_step, vmin, vmax), key=f"{name}_p")
+    st.session_state[f"{name}_now"] = val
+    with lr[1]:
+        st.session_state[f"{name}_box"] = float(round(val, 3))
+        st.number_input(f"{label} (exact value)", min_value=float(vmin), max_value=float(vmax),
+                        step=step, format="%.3f", key=f"{name}_box",
+                        label_visibility="collapsed", on_change=_apply_box, args=(name, vmin, vmax))
+    return val
 
 # ===== 2b. DXF Profile Import Helpers =====
 def _finish_line_chain(chain, curves):
@@ -171,27 +189,35 @@ with st.sidebar:
     shape_choice = st.radio("Base Shape:", ["Circular", "Polygon"], index=1, horizontal=True)
     k_mode = st.radio("Polygon Scale Mode:", ["Inscribed", "Circumscribed"], index=0, horizontal=True)
 
-    dxf_file = st.file_uploader(
-        "📥 Profile from DXF", type=["dxf"],
-        help="The curve becomes the dome profile f(r): x = radius from center, y = height. "
-             "The longest curve in the file is selected by default.",
-    )
-    dxf_selected_pts = None
-    if dxf_file is not None:
-        try:
-            dxf_curves = load_dxf_curves(dxf_file.getvalue())
-        except Exception as exc:
-            dxf_curves = []
-            st.error(f"Could not read DXF: {exc}")
-        if dxf_curves:
-            idx_default = int(np.argmax([c["length"] for c in dxf_curves]))
-            choice = st.selectbox(
-                "Curve to use:", list(range(len(dxf_curves))),
-                index=idx_default, format_func=lambda i: dxf_curves[i]["label"],
-            )
-            dxf_selected_pts = dxf_curves[int(choice)]["pts"]
-        else:
-            st.warning("No usable curves (LINE / POLYLINE / SPLINE / ARC) found in this file.")
+    # Visual order: checkboxes -> sliders -> DXF import -> export.
+    # Execution order differs (the uploader must run before the slider range
+    # is known), so placeholder containers pin each block to its visual slot.
+    cont_vis = st.container()    # Supports / Dome Edges + second series
+    cont_live = st.container()   # Distance (a) + Angle (t)
+    cont_dxf = st.container()    # DXF import (just above Export)
+
+    with cont_dxf:
+        dxf_file = st.file_uploader(
+            "📥 Profile from DXF", type=["dxf"],
+            help="The curve becomes the dome profile f(r): x = radius from center, y = height. "
+                 "The longest curve in the file is selected by default.",
+        )
+        dxf_selected_pts = None
+        if dxf_file is not None:
+            try:
+                dxf_curves = load_dxf_curves(dxf_file.getvalue())
+            except Exception as exc:
+                dxf_curves = []
+                st.error(f"Could not read DXF: {exc}")
+            if dxf_curves:
+                idx_default = int(np.argmax([c["length"] for c in dxf_curves]))
+                choice = st.selectbox(
+                    "Curve to use:", list(range(len(dxf_curves))),
+                    index=idx_default, format_func=lambda i: dxf_curves[i]["label"],
+                )
+                dxf_selected_pts = dxf_curves[int(choice)]["pts"]
+            else:
+                st.warning("No usable curves (LINE / POLYLINE / SPLINE / ARC) found in this file.")
 
     # The a-slider range follows the profile extent (A = outermost radius)
     if dxf_selected_pts is not None:
@@ -203,31 +229,29 @@ with st.sidebar:
         A_est = max(_radii) if _radii else 2.0
     A_est = max(A_est, 0.1)
 
-    # label + exact numeric entry share one row; the slider keeps full length
-    lr = st.columns([0.55, 0.45])
-    with lr[0]: st.markdown("**Distance (a)**")
-    ar = st.columns([0.14, 0.72, 0.14], gap="small")
-    with ar[0]: st.button("➖", on_click=adjust_live, args=("a", -0.1, -A_est, A_est), key="a_m")
-    with ar[1]: a_val = live_value("a", -A_est, A_est, 0.01, 2, 1.0)
-    with ar[2]: st.button("➕", on_click=adjust_live, args=("a", +0.1, -A_est, A_est), key="a_p")
-    st.session_state["a_now"] = a_val
-    st.session_state["A_lim"] = A_est
-    with lr[1]:
-        st.session_state["a_box"] = float(round(a_val, 3))
-        st.number_input("a (exact value)", min_value=float(-A_est), max_value=float(A_est),
-                        step=0.01, format="%.3f", key="a_box",
-                        label_visibility="collapsed", on_change=_apply_a_box)
+    with cont_vis:
+        vc = st.columns(2)
+        with vc[0]: show_supports = st.checkbox("Supports (3D)", value=True)
+        with vc[1]: show_edges = st.checkbox("Dome Edges (3D)", value=True)
 
-    st.markdown("**Angle (t)**")
-    tr = st.columns([0.14, 0.72, 0.14], gap="small")
-    with tr[0]: st.button("➖", on_click=adjust_live, args=("t", -0.01, 0.0, 1.0), key="t_m")
-    with tr[1]: t_val = live_value("t", 0.0, 1.0, 0.001, 3, 0.25)
-    with tr[2]: st.button("➕", on_click=adjust_live, args=("t", +0.01, 0.0, 1.0), key="t_p")
-    st.session_state["t_now"] = t_val
+        series2 = st.checkbox("➕ Second support series", value=False, key="series2")
+        if series2:
+            # same design as the main Distance/Angle controls
+            a2_val = live_control("Distance (a₂)", "a2", -A_est, A_est, 0.01, 2, 0.0, 0.1)
+            t2_val = live_control("Angle (t₂)", "t2", 0.0, 1.0, 0.001, 3, 0.5, 0.01)
+            s2r2 = st.columns(2)
+            with s2r2[0]: count2 = st.number_input("Sections/Side₂", min_value=0, max_value=10, value=2, key="count2")
+            with s2r2[1]: spacing2 = st.number_input("Spacing₂", min_value=0.0, max_value=5.0, value=0.5, key="spacing2")
+        else:
+            t2_val = a2_val = spacing2 = None
+            count2 = 0
 
-    vc = st.columns(2)
-    with vc[0]: show_supports = st.checkbox("Supports (3D)", value=True)
-    with vc[1]: show_edges = st.checkbox("Dome Edges (3D)", value=True)
+    with cont_live:
+        a_val = live_control("Distance (a)", "a", -A_est, A_est, 0.01, 2, 1.0, 0.1)
+        t_val = live_control("Angle (t)", "t", 0.0, 1.0, 0.001, 3, 0.25, 0.01)
+        ec = st.columns(2)
+        with ec[0]: num_each_side = st.number_input("Sections/Side", 0, 10, 2)
+        with ec[1]: export_spacing = st.number_input("Spacing", 0.0, 5.0, 0.5)
 
     # Always-on display behavior - correct by default, no toggles needed
     show_all_curves = True
@@ -236,9 +260,6 @@ with st.sidebar:
     mirror_flattening = True
     rotate_flattening = True
 
-    ec = st.columns(2)
-    with ec[0]: num_each_side = st.number_input("Sections/Side", 0, 10, 2)
-    with ec[1]: export_spacing = st.number_input("Spacing", 0.0, 5.0, 0.5)
     trigger_sections = st.button("📤 Export Sections (2D Poly)", use_container_width=True)
     trigger_stencils = st.button("📤 Export Stencils (Flattened)", use_container_width=True)
 
@@ -364,20 +385,26 @@ i_start = int((N - (N % 2)) / 2 + (N % 2))
 j_end = int((N - ((N - 1) % 2)) / 2)
 i_indices = range(i_start, N)
 j_indices = range(1, j_end + 1)
-s_list = [t_val] + \
-         [t_val - d_step * i for i in i_indices] + \
-         [t_val - d_step * j for j in j_indices]
-s_list = sorted([(s % 1) for s in s_list])
+def facet_s_list(t_anchor):
+    """Facet angles (as s in [0,1)) for a section plane anchored at t_anchor."""
+    s = [t_anchor] + \
+        [t_anchor - d_step * i for i in i_indices] + \
+        [t_anchor - d_step * j for j in j_indices]
+    return sorted([(x % 1) for x in s])
+
+s_list = facet_s_list(t_val)
 
 r_max = A_val
 
-def compute_section(a_in):
+def compute_section(a_in, s_set=None):
     """Section of the dome along the vertical plane at distance a_in from center
-    (at angle t). Returns (curves, z_min), both cut at the dome edge."""
+    (at angle t, or at the angle whose facet list s_set is given).
+    Returns (curves, z_min), both cut at the dome edge."""
+    s_use = s_list if s_set is None else s_set
     if shape_choice == "Polygon":
         z_args = np.array([
             (a_in * np.sin(2 * np.pi * s) - x_vals * np.cos(2 * np.pi * s)) / sf_factor
-            for s in s_list
+            for s in s_use
         ])
         # A point belongs to the dome footprint only if it lies on the inner
         # side of ALL facet edges.
@@ -443,7 +470,7 @@ angle_rad = 2 * np.pi * t_val
 X_line = a_val * np.sin(angle_rad) - x_vals * np.cos(angle_rad)
 Y_line = a_val * np.cos(angle_rad) + x_vals * np.sin(angle_rad)
 if show_supports:
-    fig3d.add_trace(go.Scatter3d(x=X_line, y=Y_line, z=active_Z, mode="lines", line=dict(color="red", width=8), name="Main Envelope Path"))
+    fig3d.add_trace(go.Scatter3d(x=X_line, y=Y_line, z=active_Z, mode="lines", line=dict(color="#1565c0", width=3), name="Main Envelope Path"))
 
 # Support Lines
 support_plan = []   # collected for the 2D plan view
@@ -454,8 +481,22 @@ if show_supports:
         Z_sup = compute_section(a_sup)[1]
         Xs_line = a_sup * np.sin(angle_rad) - x_vals * np.cos(angle_rad)
         Ys_line = a_sup * np.cos(angle_rad) + x_vals * np.sin(angle_rad)
-        fig3d.add_trace(go.Scatter3d(x=Xs_line, y=Ys_line, z=Z_sup, mode="lines", line=dict(color="black", width=3), showlegend=False))
+        fig3d.add_trace(go.Scatter3d(x=Xs_line, y=Ys_line, z=Z_sup, mode="lines", line=dict(color="#1565c0", width=3), showlegend=False))
         support_plan.append((Xs_line, Ys_line, Z_sup))
+
+# Second support series - its own angle, center, spacing and count (blue)
+support_plan2 = []
+if series2:
+    s_list2 = facet_s_list(t2_val)
+    angle2_rad = 2 * np.pi * t2_val
+    for i2 in range(-int(count2), int(count2) + 1):
+        a_sup2 = a2_val + i2 * spacing2
+        Z_sup2 = compute_section(a_sup2, s_list2)[1]
+        Xs2 = a_sup2 * np.sin(angle2_rad) - x_vals * np.cos(angle2_rad)
+        Ys2 = a_sup2 * np.cos(angle2_rad) + x_vals * np.sin(angle2_rad)
+        fig3d.add_trace(go.Scatter3d(x=Xs2, y=Ys2, z=Z_sup2, mode="lines",
+                                     line=dict(color="#1565c0", width=3), showlegend=False))
+        support_plan2.append((Xs2, Ys2, Z_sup2))
 
 # Dome skeleton edges (ribs where adjacent facets meet + base rim)
 if show_edges:
@@ -546,12 +587,18 @@ if not grid_view:
         m_sup = np.isfinite(Zs_p)
         if np.any(m_sup):
             fig_plan.add_trace(go.Scatter(x=Xs_p[m_sup], y=Ys_p[m_sup], mode="lines",
-                                          line=dict(color="gray", width=1.5), showlegend=False))
+                                          line=dict(color="#1565c0", width=1.5), showlegend=False))
+
+    for (Xs_p, Ys_p, Zs_p) in support_plan2:
+        m_sup2 = np.isfinite(Zs_p)
+        if np.any(m_sup2):
+            fig_plan.add_trace(go.Scatter(x=Xs_p[m_sup2], y=Ys_p[m_sup2], mode="lines",
+                                          line=dict(color="#1565c0", width=1.5), showlegend=False))
 
     m_env = np.isfinite(active_Z)
     if show_supports and np.any(m_env):
         fig_plan.add_trace(go.Scatter(x=X_line[m_env], y=Y_line[m_env], mode="lines",
-                                      line=dict(color="red", width=3), name="Main Envelope Path"))
+                                      line=dict(color="#1565c0", width=1.5), showlegend=False))
 
     fig_plan.update_layout(height=550, template="plotly_white", xaxis_title="x", yaxis_title="y",
                            uirevision="plan-view",
