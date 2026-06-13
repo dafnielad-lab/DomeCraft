@@ -10,7 +10,7 @@
 
 Draw the dome's profile curve with your mouse (or import it from a DXF file), and the app instantly computes the full dome geometry: the 3D surface, a true-scale plan view, polygonal cross-sections for supports, and flattened segment stencils ready for cutting. Everything updates **live** while you drag sliders and control points — no page reloads, no view resets.
 
-Geometry and mathematics designed by **Elad (Layogev)**.
+Geometry and mathematics designed by **Elad Dafni**.
 
 ---
 
@@ -71,3 +71,7 @@ The app opens in your browser at `http://localhost:8501`.
 | `live_chart/index.html` | Persistent chart component — in-place Plotly updates, view preservation |
 | `live_slider/index.html` | Slider that streams values while dragging |
 | `Launch_DomeCraft.bat` | One-click Windows launcher |
+
+---
+
+<p align="center"><sub>Designed and developed by <b>Elad Dafni</b> · © 2026</sub></p>

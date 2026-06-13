@@ -746,3 +746,10 @@ st.sidebar.link_button(
     use_container_width=True,
     type="primary",
 )
+
+st.markdown(
+    "<div style='text-align:center; color:#888; font-size:0.78rem; "
+    "margin-top:1.5rem;'>Designed and developed by "
+    "<b>Elad Dafni</b> · © 2026</div>",
+    unsafe_allow_html=True,
+)
