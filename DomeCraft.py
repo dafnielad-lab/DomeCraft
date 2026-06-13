@@ -183,10 +183,6 @@ def dxf_curve_to_profile(pts_arr):
 
 # ===== 3. Sidebar - All Inputs =====
 with st.sidebar:
-    st.markdown(
-        "📖 [Instructions & Documentation](https://dafnielad-lab.github.io/DomeCraft/)"
-    )
-    st.markdown("---")
     grid_view = st.checkbox("🖥️ 2×2 Grid View (all graphs together)", value=False, key="grid_view")
 
     N = st.number_input("N (Sides)", min_value=3, max_value=120, value=12, step=1)
@@ -742,3 +738,11 @@ if enable_flattening:
     )
 else:
     st.sidebar.caption("⚠️ Flattening disabled — stencils export unavailable.")
+
+st.sidebar.markdown("---")
+st.sidebar.link_button(
+    "📖  Instructions & Documentation",
+    "https://dafnielad-lab.github.io/DomeCraft/",
+    use_container_width=True,
+    type="primary",
+)
