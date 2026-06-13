@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import ezdxf
-import subprocess, sys, tempfile, os
+import io, tempfile, os
 from scipy.interpolate import PchipInterpolator
 
 # --- Streamlit Page Setup ---
@@ -183,6 +183,10 @@ def dxf_curve_to_profile(pts_arr):
 
 # ===== 3. Sidebar - All Inputs =====
 with st.sidebar:
+    st.markdown(
+        "📖 [Instructions & Documentation](https://dafnielad-lab.github.io/DomeCraft/)"
+    )
+    st.markdown("---")
     grid_view = st.checkbox("🖥️ 2×2 Grid View (all graphs together)", value=False, key="grid_view")
 
     N = st.number_input("N (Sides)", min_value=3, max_value=120, value=12, step=1)
@@ -260,8 +264,8 @@ with st.sidebar:
     mirror_flattening = True
     rotate_flattening = True
 
-    trigger_sections = st.button("📤 Export Sections (2D Poly)", use_container_width=True)
-    trigger_stencils = st.button("📤 Export Stencils (Flattened)", use_container_width=True)
+    # Export download buttons are rendered at the end of the script,
+    # after all geometry has been computed.
 
 # ===== 4. Layout + Profile Source =====
 # In grid view all four graphs share one screen: row 1 = board + 3D dome,
@@ -667,22 +671,12 @@ if enable_flattening:
         show_live(fig_flat, "liveflat", FLAT_H)
 
 # ===== 9. Export Logic =====
-def open_save_dialog(title='Save DXF'):
-    dialog_code = f"""
-import sys
-from PyQt5.QtWidgets import QApplication, QFileDialog
-app = QApplication(sys.argv)
-file, _ = QFileDialog.getSaveFileName(None, '{title}', '', 'DXF Files (*.dxf)')
-if file: print(file)
-"""
-    tmp_file = os.path.join(tempfile.gettempdir(), "qt_save_dialog.py")
-    with open(tmp_file, "w", encoding="utf-8") as f: f.write(dialog_code)
-    result = subprocess.run([sys.executable, tmp_file], capture_output=True, text=True)
-    return result.stdout.strip()
+def _doc_to_bytes(doc):
+    buf = io.StringIO()
+    doc.write(buf)
+    return buf.getvalue().encode("utf-8")
 
-def export_sections_dxf():
-    path = open_save_dialog('Save Polygonal Sections')
-    if not path: return
+def build_sections_dxf_bytes():
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
@@ -699,15 +693,9 @@ def export_sections_dxf():
         pts_min = [(float(x + offset), float(z)) for x, z in zip(x_vals, Z_min_cut) if not np.isnan(z)]
         if pts_min: msp.add_lwpolyline(pts_min, dxfattribs={"layer": "Envelopes", "color": 5})
 
-    doc.saveas(path)
-    st.success(f"✅ Sections Exported to {path}")
+    return _doc_to_bytes(doc)
 
-def export_stencils_dxf():
-    if not enable_flattening:
-        st.warning("Flattening is disabled.")
-        return
-    path = open_save_dialog('Save Flattened Stencils')
-    if not path: return
+def build_stencils_dxf_bytes():
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
@@ -734,10 +722,23 @@ def export_stencils_dxf():
                 for i in range(len(xr) - 1):
                     msp.add_line((float(xr[i]), float(yr[i])), (float(xr[i + 1]), float(yr[i + 1])), dxfattribs={"layer": "Stencils"})
 
-    doc.saveas(path)
-    st.success(f"✅ Stencils Exported to {path}")
+    return _doc_to_bytes(doc)
 
-if trigger_sections:
-    export_sections_dxf()
-if trigger_stencils:
-    export_stencils_dxf()
+st.sidebar.download_button(
+    "📤 Export Sections (2D Poly)",
+    data=build_sections_dxf_bytes(),
+    file_name="dome_sections.dxf",
+    mime="application/dxf",
+    use_container_width=True,
+)
+
+if enable_flattening:
+    st.sidebar.download_button(
+        "📤 Export Stencils (Flattened)",
+        data=build_stencils_dxf_bytes(),
+        file_name="dome_stencils.dxf",
+        mime="application/dxf",
+        use_container_width=True,
+    )
+else:
+    st.sidebar.caption("⚠️ Flattening disabled — stencils export unavailable.")

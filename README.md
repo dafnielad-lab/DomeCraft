@@ -1,5 +1,11 @@
 # DomeCraft 🏟️
 
+### 🚀 [Launch DomeCraft in your browser →](https://domecraft.streamlit.app/)
+
+*No installation needed — runs live on Streamlit Cloud.*
+
+---
+
 **An interactive CAD-style tool for designing polygonal and circular domes from a hand-drawn profile — with live 3D preview, cross-sections, supports, flattened fabrication stencils, and DXF export.**
 
 Draw the dome's profile curve with your mouse (or import it from a DXF file), and the app instantly computes the full dome geometry: the 3D surface, a true-scale plan view, polygonal cross-sections for supports, and flattened segment stencils ready for cutting. Everything updates **live** while you drag sliders and control points — no page reloads, no view resets.
